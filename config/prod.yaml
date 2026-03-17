@@ -1,0 +1,45 @@
+# config/prod.yaml
+# Production environment configuration
+# Use with: deploy.sh prod
+
+environment: prod
+
+aws:
+  region: us-east-1
+  profile: prod
+
+s3:
+  raw_bucket:       manufacturing-analytics-raw-prod
+  processed_bucket: manufacturing-analytics-processed-prod
+  scripts_bucket:   manufacturing-analytics-glue-scripts-prod
+  raw_prefixes:
+    production: production/
+    downtime:   downtime/
+    quality:    quality/
+
+glue:
+  database:       manufacturing_analytics_db_prod
+  job_name:       manufacturing-analytics-etl-job-prod
+  worker_type:    G.1X
+  num_workers:    4
+  timeout_min:    60
+  max_retries:    1
+  crawler_schedule: "cron(0 2 * * ? *)"   # Daily 02:00 UTC in prod
+
+redshift:
+  cluster_id:   manufacturing-prod
+  database:     manufacturing_prod
+  schema:       manufacturing
+  port:         5439
+  iam_role_arn: arn:aws:iam::123456789012:role/RedshiftS3AccessRole-prod
+
+logging:
+  level: INFO
+  format: json
+
+data_quality:
+  max_null_ratio:      0.05
+  max_duplicate_ratio: 0.001
+  oee_bounds:
+    min: 0
+    max: 100

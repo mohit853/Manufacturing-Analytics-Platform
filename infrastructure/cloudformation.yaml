@@ -1,0 +1,235 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Manufacturing Data Lake Pipeline — S3 (Raw + Processed), Glue Database,
+  Crawlers, ETL Job, and IAM roles for a single-plant analytics stack.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: manufacturing-analytics
+  PlantId:
+    Type: String
+    Default: plant-001
+  RedshiftRoleArn:
+    Type: String
+    Description: ARN of the IAM role attached to your Redshift cluster for S3 COPY access.
+
+# ─────────────────────────────────────────────
+# S3 BUCKETS
+# ─────────────────────────────────────────────
+Resources:
+
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-raw-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireRawAfter90Days
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Zone
+          Value: raw
+
+  ProcessedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-processed-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Zone
+          Value: processed
+
+  GlueScriptsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-glue-scripts-${AWS::AccountId}"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+# ─────────────────────────────────────────────
+# IAM ROLE — Glue
+# ─────────────────────────────────────────────
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-glue-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3DataLakeAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt RawBucket.Arn
+                  - !Sub "${RawBucket.Arn}/*"
+                  - !GetAtt ProcessedBucket.Arn
+                  - !Sub "${ProcessedBucket.Arn}/*"
+                  - !GetAtt GlueScriptsBucket.Arn
+                  - !Sub "${GlueScriptsBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+
+# ─────────────────────────────────────────────
+# GLUE DATABASE
+# ─────────────────────────────────────────────
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub "${ProjectName}_db"
+        Description: Glue Data Catalog for manufacturing analytics pipeline
+
+# ─────────────────────────────────────────────
+# GLUE CRAWLERS — Raw Zone
+# ─────────────────────────────────────────────
+  CrawlerProduction:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${ProjectName}-crawler-production"
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${RawBucket}/production/"
+      TablePrefix: raw_
+      Schedule:
+        ScheduleExpression: "cron(0 2 * * ? *)"   # Daily at 02:00 UTC
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+
+  CrawlerDowntime:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${ProjectName}-crawler-downtime"
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${RawBucket}/downtime/"
+      TablePrefix: raw_
+      Schedule:
+        ScheduleExpression: "cron(0 2 * * ? *)"
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+
+  CrawlerQuality:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${ProjectName}-crawler-quality"
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${RawBucket}/quality/"
+      TablePrefix: raw_
+      Schedule:
+        ScheduleExpression: "cron(0 2 * * ? *)"
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+
+  CrawlerProcessed:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${ProjectName}-crawler-processed"
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${ProcessedBucket}/fact_production/"
+      TablePrefix: processed_
+      Schedule:
+        ScheduleExpression: "cron(30 3 * * ? *)"
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+
+# ─────────────────────────────────────────────
+# GLUE ETL JOB
+# ─────────────────────────────────────────────
+  GlueETLJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${ProjectName}-etl-job"
+      Role: !GetAtt GlueServiceRole.Arn
+      GlueVersion: "4.0"
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${GlueScriptsBucket}/scripts/glue_etl_job.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--job-language": "python"
+        "--enable-metrics": "true"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--RAW_BUCKET": !Ref RawBucket
+        "--PROCESSED_BUCKET": !Ref ProcessedBucket
+        "--GLUE_DATABASE": !Sub "${ProjectName}_db"
+        "--TempDir": !Sub "s3://${GlueScriptsBucket}/tmp/"
+      MaxRetries: 1
+      Timeout: 60
+      NumberOfWorkers: 4
+      WorkerType: G.1X
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Tags:
+        Project: !Ref ProjectName
+
+# ─────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────
+Outputs:
+  RawBucketName:
+    Value: !Ref RawBucket
+    Export:
+      Name: !Sub "${ProjectName}-raw-bucket"
+
+  ProcessedBucketName:
+    Value: !Ref ProcessedBucket
+    Export:
+      Name: !Sub "${ProjectName}-processed-bucket"
+
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase
+    Export:
+      Name: !Sub "${ProjectName}-glue-db"
+
+  GlueRoleArn:
+    Value: !GetAtt GlueServiceRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-glue-role-arn"
+
+  GlueETLJobName:
+    Value: !Ref GlueETLJob
+    Export:
+      Name: !Sub "${ProjectName}-etl-job-name"

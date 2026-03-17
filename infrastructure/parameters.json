@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "manufacturing-analytics"
+  },
+  {
+    "ParameterKey": "PlantId",
+    "ParameterValue": "plant-001"
+  },
+  {
+    "ParameterKey": "RedshiftRoleArn",
+    "ParameterValue": "arn:aws:iam::123456789012:role/RedshiftS3AccessRole"
+  }
+]
