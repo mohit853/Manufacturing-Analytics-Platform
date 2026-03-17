@@ -1,10 +1,13 @@
+## Architecture Overview
+
+```
 Manufacturing Data Sources
    │
    │ (CSV / JSON / Operational Logs)
    ▼
 Amazon S3 (Data Lake - Raw Zone)
    │
-   │  AWS Glue Crawlers
+   │ AWS Glue Crawlers
    ▼
 AWS Glue ETL (PySpark Transformations)
    │
@@ -22,3 +25,4 @@ Power BI Dashboards
    │
    ▼
 Plant → Line → Machine Drilldowns
+```
